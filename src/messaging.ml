@@ -33,12 +33,6 @@ exception InvalidProcessName
 exception NotInitialized
 
 
-(* Return true if the process is the invariant manages *)
-let is_invariant_manager = function 
-  | `Supervisor -> true
-  | _ -> false
-
-
 (* Pretty-print ZMQ message frames *)
 let rec pp_print_zmsg_frames ppf = function
   | [] -> ()
@@ -81,53 +75,57 @@ sig
 
   type relay_message 
 
+  (** A message to be output to the user *)
   type output_message = 
     | Log of int * string
-    | Stat of string 
-    | Progress of int 
+    | Stat of string
+    | Progress of int
 
+  (** A message internal to the messaging system *)
   type control_message = 
     | Ready
     | Ping
     | Terminate
     | Resend of int
 
+  (** A message *)
   type message = 
     | OutputMessage of output_message
     | ControlMessage of control_message
     | RelayMessage of int * relay_message
 
-  type ctx
-
-  type pub_socket
-  type pull_socket
-  type sub_socket
-  type push_socket
-
+  (** Thread *)
   type thread
 
-  val init_im : unit -> (ctx * pub_socket * pull_socket) * (string * string)
+  (** Handle to the invariant manager's publisher socket *)
+  type im_socket
 
-  val init_worker : Lib.kind_module -> string -> string -> ctx * sub_socket * push_socket
+  (** Handle to a worker's subscriber socket *)
+  type worker_socket
 
-  val run_im : ctx * pub_socket * pull_socket -> (int * Lib.kind_module) list -> (exn -> unit) -> unit
+  (** Create the publisher socket for the invariant manager. *)
+  val init_im : unit -> im_socket
 
-  val run_worker : ctx * sub_socket * push_socket -> Lib.kind_module -> (exn -> unit) -> thread
+  (** Create a subscriber socket for a worker process, subscribed
+      to the invariant manager's publisher. *)
+  val init_worker : Lib.kind_module -> im_socket -> worker_socket
+
+  (** Start the background thread for the invariant manager *)
+  val run_im : im_socket -> (int * Lib.kind_module) list -> (exn -> unit) -> unit
+
+  (** Start the background thread for a worker process *)
+  val run_worker : worker_socket -> Lib.kind_module -> (exn -> unit) -> thread
 
   val send_relay_message : relay_message -> unit
-
   val send_output_message : output_message -> unit
-
   val send_term_message : unit -> unit
-    
   val recv : unit -> (Lib.kind_module * message) list
-    
   val update_child_processes_list : (int * Lib.kind_module) list -> unit
 
-  val purge_im_mailbox : ctx * pub_socket * pull_socket -> unit
-    
-  val check_termination : unit -> bool
+  (** Purge the invariant manager mailbox *)
+  val purge_im_mailbox : im_socket -> unit
 
+  val check_termination : unit -> bool
   val exit : thread -> unit 
 
 end
@@ -136,18 +134,6 @@ end
 (* Functor to instantiate the messaging system with a type of messages *)
 module Make (T: RelayMessage) : S with type relay_message = T.t =
 struct
-
-  (* ZeroMQ context *)
-  type ctx = Zmq.Context.t
-
-  (* ZeroMQ sockets *)
-  type pub_socket = [ `Pub ] Zmq.Socket.t
-
-  type pull_socket = [ `Pull ] Zmq.Socket.t
-
-  type sub_socket = [ `Sub ] Zmq.Socket.t
-
-  type push_socket = [ `Push ] Zmq.Socket.t
 
   (* Background thread *)
   type thread = Thread.t
@@ -319,6 +305,226 @@ struct
           (tag :: sender :: payload);
         (int_of_string sender, message_of_strings payload tag)
     | _ -> raise BadMessage
+
+  (* ******************************************************************** *)
+  (* Socket Module                                                        *)
+  (* ******************************************************************** *)
+
+  (* Send a buffer with a fixed-length header*)
+  let send_frame flow buf =
+    let len = Cstruct.length buf in
+    let header = Cstruct.create 4 in
+    Cstruct.BE.set_uint32 header 0 (Int32.of_int len);
+    Eio.Flow.write flow [header; buf]
+
+  (* Receive a buffer *)
+  let recv_frame flow =
+    let header = Cstruct.create 4 in
+    Eio.Flow.read_exact flow header;
+    let len = Int32.to_int (Cstruct.BE.get_uint32 header 0) in
+    let max_frame = 16 * 1024 * 1024 in  (* 16 MB ceiling *)
+    if len < 0 || len > max_frame then raise (Invalid_argument (Printf.sprintf "frame too large: %d" len));
+    let body = Cstruct.create len in
+    Eio.Flow.read_exact flow body;
+    body
+
+  (* Publisher module for invariant manager*)
+  module Publisher : sig
+    type t = {
+      mutex : Eio.Mutex.t;
+      path : string;
+      mutable subscribers : string list;
+      stream : string list Eio.Stream.t
+    }
+
+    val create : string -> t
+    val path : t -> string
+    val listen : t -> Eio_unix.Stdenv.base -> unit
+    val recv_all : t -> string list option
+    val send_all : t -> string list -> Eio_unix.Stdenv.base -> unit
+  end = 
+  struct
+    type t = {
+      mutex : Eio.Mutex.t;
+      path : string;
+      mutable subscribers : string list;
+      stream : string list Eio.Stream.t
+    }
+
+    let create p =
+      (* Drop a stale socket file *)
+      (try Unix.unlink p with Unix.Unix_error _ -> ());
+      {
+        mutex = Eio.Mutex.create (); path = p; subscribers = []; stream = Eio.Stream.create max_int
+      }
+
+    let path pub = pub.path
+
+    let snapshot_subscribers pub =
+      Eio.Mutex.lock pub.mutex;
+      let subs = pub.subscribers in
+      Eio.Mutex.unlock pub.mutex;
+      subs
+    
+    let recv pub sw server =
+      (* Accept a connection from a client *)
+      Eio.Net.accept_fork server ~sw ~on_error:raise
+        (fun conn _addr ->
+          try
+            while true do
+              (* Receive frame *)
+              let frame = recv_frame conn in
+
+              (* Reconstruct zmsg *)
+              let str = Cstruct.to_string frame in
+              let parts = Marshal.from_string str 0 in
+
+              (* If this is the first message from this subscriber, add it to our list *)
+              let path = "/tmp/worker" ^ (List.nth parts 1) ^ ".sock" in
+              Eio.Mutex.lock pub.mutex;
+              if not (List.mem path pub.subscribers) then pub.subscribers <- path :: pub.subscribers;
+              Eio.Mutex.unlock pub.mutex;
+
+              (* Add zmsg to queue *)
+              Eio.Stream.add pub.stream parts
+            done
+          with End_of_file -> ()
+        )
+      
+    (* Persistently accept connections from clients *)
+    let listen pub env =
+      Eio.Switch.run @@ fun sw ->
+        let net = Eio.Stdenv.net env in
+        let server = Eio.Net.listen net ~sw ~reuse_addr:true ~backlog:5 (`Unix pub.path) in
+        while true do
+          recv pub sw server
+        done
+
+    (* Take messages from the queue *)
+    let recv_all pub =
+      Eio.Stream.take_nonblocking pub.stream
+
+    (* Send to all connections *)
+    let send connections zmsg = 
+      List.iter (fun conn -> send_frame conn (Cstruct.of_string (Marshal.to_string zmsg []))) connections
+
+    (* Get rid of old connections *)
+    let remove_dead_connections pub env =
+      Eio.Mutex.lock pub.mutex;
+      let dead_connections = ref [] in
+      Eio.Switch.run @@ fun sw ->
+        let net = Eio.Stdenv.net env in
+
+        (* Try connecting to each subscriber. If it causes an error, it's dead*)
+        List.iter(fun subscriber ->
+          try
+            (let _ = Eio.Net.connect ~sw net (`Unix subscriber) in
+            ())
+          with _ -> dead_connections := subscriber :: !dead_connections
+        ) pub.subscribers;
+      
+      (* Filter out dead subscribers *)
+      pub.subscribers <- List.filter (fun sub -> not (List.mem sub !dead_connections)) pub.subscribers;
+      Eio.Mutex.unlock pub.mutex
+    
+    let send_all pub zmsg env =
+      Eio.Switch.run @@ fun sw ->
+        let net = Eio.Stdenv.net env in
+
+        (* Remove dead connections first *)
+        remove_dead_connections pub env;
+
+        (* Connect to all subscribers *)
+        let connections = List.map (fun path -> Eio.Net.connect ~sw net (`Unix (path))) (snapshot_subscribers pub) in
+        Eio.Mutex.lock pub.mutex;
+        send connections zmsg;
+        Eio.Mutex.unlock pub.mutex
+  end
+
+  (* Subscriber module for workers *)
+  module Subscriber : sig 
+    type t = {
+      mutex : Eio.Mutex.t;
+      path : string;
+      publisher_path : string;
+      mutable topics : string list;
+      stream : string list Eio.Stream.t
+    }
+
+    val create : string -> t
+    val subscribe : t -> string -> unit
+    val listen : t -> Eio_unix.Stdenv.base -> unit
+    val recv_all : t -> string list option
+    val send_all : t -> string list -> Eio_unix.Stdenv.base -> unit
+
+  end =
+  struct
+    type t = {
+      mutex : Eio.Mutex.t;
+      path : string;
+      publisher_path : string;
+      mutable topics : string list;
+      stream : string list Eio.Stream.t
+    }
+
+    let create publisher_path =
+      (* PID-based path *)
+      let p = Printf.sprintf "/tmp/worker_%d.sock" (Unix.getpid ()) in
+      (try Unix.unlink p with Unix.Unix_error _ -> ());
+      {
+        mutex = Eio.Mutex.create (); path = p; publisher_path; topics = []; stream = Eio.Stream.create max_int
+      }
+
+    (* Add to topic filtering *)
+    let subscribe sub topic =
+      Eio.Mutex.lock sub.mutex;
+      sub.topics <- sub.topics @ [topic];
+      Eio.Mutex.unlock sub.mutex
+
+
+    let recv sub sw server =
+      Eio.Net.accept_fork server ~sw ~on_error:raise
+        (fun conn _addr ->
+          try 
+            while true do 
+              let frame = recv_frame conn in
+              let str = Cstruct.to_string frame in
+              let parts = Marshal.from_string str 0 in
+              if List.mem (List.hd parts) sub.topics then
+                Eio.Stream.add sub.stream parts;
+            done
+          with End_of_file -> ()
+        )
+
+    let listen sub env =
+      Eio.Switch.run @@ fun sw ->
+        let net = Eio.Stdenv.net env in
+        let server = Eio.Net.listen net ~sw ~reuse_addr:true ~backlog:5 (`Unix sub.path) in
+        Eio.Fiber.fork ~sw
+          (fun () ->
+            while true do
+              recv sub sw server
+            done)
+          
+    let recv_all sub =
+      Eio.Stream.take_nonblocking sub.stream
+    
+    let send out_conn zmsg =
+      send_frame out_conn (Cstruct.of_string (Marshal.to_string zmsg []))
+    
+    let send_all sub zmsg env =
+      Eio.Switch.run @@ fun sw ->
+        let net = Eio.Stdenv.net env in
+
+        (* Connect to publisher *)
+        let out_conn = Eio.Net.connect ~sw net (`Unix sub.publisher_path) in
+        Eio.Mutex.lock sub.mutex;
+        send out_conn zmsg;
+        Eio.Mutex.unlock sub.mutex
+  end
+
+  type im_socket = Publisher.t
+  type worker_socket = Subscriber.t
 
   (* ******************************************************************** *)
   (* Threadsafe list option                                               *)
@@ -680,38 +886,50 @@ struct
 
     handle_all (empty_list incoming)
 
-
   let purge_messages sock =
-    let rec recv_iter _ = recv_iter (Zmq.Socket.recv_all ~block:false sock) in
+  let rec recv_iter = function
+    | Some _ -> recv_iter (Publisher.recv_all sock)
+    | None -> ()
+  in
+  recv_iter (Publisher.recv_all sock)
 
-    try recv_iter (Zmq.Socket.recv_all ~block:false sock)
-    with Unix.Unix_error (Unix.EAGAIN, _, _) -> ()
 
-
-  let recv_messages sock as_invariant_manager =
+  let im_recv_messages (sock : Publisher.t) =
     (* receive up to 'message_burst_size' messages from sock *)
     let rec recv_iter i zmsg =
       if i < message_burst_size then (
-        ( if as_invariant_manager || not !debug_mode then
-          enqueue (msg_of_zmsg zmsg) incoming
-        else
-          let _, message = msg_of_zmsg zmsg in
-          enqueue (`Supervisor, message) incoming_handled );
-        recv_iter (i + 1) (Zmq.Socket.recv_all ~block:false sock) )
+        match zmsg with
+        | Some m -> enqueue (msg_of_zmsg m) incoming ;
+          recv_iter (i + 1) (Publisher.recv_all sock)
+        | None -> ())
     in
 
-    try recv_iter 0 (Zmq.Socket.recv_all ~block:false sock)
-    with Unix.Unix_error (Unix.EAGAIN, _, _) -> ()
+    recv_iter 0 (Publisher.recv_all sock)
 
+  let worker_recv_messages (sock : Subscriber.t) =
+    (* receive up to 'message_burst_size' messages from sock *)
+    let rec recv_iter i zmsg =
+      if i < message_burst_size then (
+        match zmsg with
+        | Some m -> ( if not !debug_mode then
+          enqueue (msg_of_zmsg m) incoming
+        else
+          let _, message = msg_of_zmsg m in
+          enqueue (`Supervisor, message) incoming_handled );
+        recv_iter (i + 1) (Subscriber.recv_all sock)
+        | None -> ())
+    in
 
-  let im_send_messages sock =
+    recv_iter 0 (Subscriber.recv_all sock)
+
+  let im_send_messages sock env =
     (* send up to 'message_burst_size' messages in invariant manager's
        outgoing message queue *)
     let rec send_iter i outgoing_msg =
       if i < message_burst_size && outgoing_msg != None then (
         let message = get outgoing_msg in
         let zm = zmsg_of_msg message in
-        Zmq.Socket.send_all sock zm;
+        Publisher.send_all sock zm env;
 
         send_iter (i + 1) (dequeue outgoing) )
     in
@@ -719,7 +937,7 @@ struct
     send_iter 0 (dequeue outgoing)
 
 
-  let worker_send_messages sock unconfirmed_invariants =
+  let worker_send_messages sock unconfirmed_invariants env =
     (* send up to 'message_burst_size' messages in worker's outgoing
        message queue *)
     let rec send_iter i outgoing_msg =
@@ -729,7 +947,7 @@ struct
         Debug.messaging "Worker %d sending message %a" (Unix.getpid ())
           pp_print_message message;
 
-        Zmq.Socket.send_all sock (zmsg_of_msg message);
+        Subscriber.send_all sock (zmsg_of_msg message) env;
 
         (* if this message is a relay message, place it in
            unconfirmed list with current timestamp *)
@@ -837,106 +1055,107 @@ struct
   (*  Threads                                                             *)
   (* ******************************************************************** *)
 
-  let im_thread (_ (* bg_ctx *), pub_sock, pull_sock) workers on_exit =
+  let im_thread (im : Publisher.t) workers on_exit =
 
-    let invariant_id = ref 1 in
+    try 
+      Eio_main.run @@ fun env ->
+        Eio.Switch.run @@ fun sw ->
 
-    let rec init_and_run workers =
-      (* List of PIDs only. *)
-      let worker_pids = List.map fst workers in
+        Eio.Fiber.fork_daemon ~sw (fun () ->
+          Publisher.listen im env;
+          `Stop_daemon); 
+        let invariant_id = ref 1 in
 
-      (* Hashtable to store time each worker was last seen. *)
-      let worker_status =
-        (Hashtbl.create (List.length worker_pids))
-      in
+        let rec init_and_run workers =
+          (* List of PIDs only. *)
+          let worker_pids = List.map fst workers in
 
-      (* Rewrite this code or remove it.
-         Messages are discarded while waiting for workers.
+          (* Hashtable to store time each worker was last seen. *)
+          let worker_status =
+            (Hashtbl.create (List.length worker_pids))
+          in
 
-      Debug.messaging
-        "Waiting for workers (%a) to become ready."
-        (pp_print_list Format.pp_print_int ",@")
-        worker_pids;
+          (* Rewrite this code or remove it.
+             Messages are discarded while waiting for workers.
 
-      (* Waiting for all workers to be ready. *)
-      wait_for_workers
-        worker_pids worker_status pub_sock pull_sock ;
+          Debug.messaging
+            "Waiting for workers (%a) to become ready."
+            (pp_print_list Format.pp_print_int ",@")
+            worker_pids;
 
-      Debug.messaging "All workers are ready.";*)
+          (* Waiting for all workers to be ready. *)
+          wait_for_workers
+            worker_pids worker_status pub_sock pull_sock ;
 
-      update_worker_status worker_pids worker_status ;
+          Debug.messaging "All workers are ready.";*)
+
+          update_worker_status worker_pids worker_status ;
+
+          (* Unique invariant identifier and invariants hash table. *)
+          invariant_id := 1 ;
+          let invariants = (Hashtbl.create 1000) in
+
+          (* Running with the workers pids, the time hashtable, and the
+             invariants. *)
+          run workers worker_pids worker_status invariants
+
+        and run workers worker_pids worker_status invariants =
+
+          (* We take the lock to avoid race conditions during restarts,
+          especially we want to avoid messages from the previous analysis to be received *)
+          Mutex.lock new_workers_option.lock ;
+
+          (* Check for new workers, indicating a restart of the supervisor. *)
+          let res = new_workers_option.l_opt in
+          new_workers_option.l_opt <- None ;
+          match res with
+          | Some new_workers -> (
+            (* We do not need the lock here
+            because init_and_run does not reads the messages *)
+            Mutex.unlock new_workers_option.lock ;
+            Debug.messaging
+              "Child processes update, \
+                setting things up and resume running.";
+            init_and_run new_workers
+          )
+          | None -> (
+            (* No worker means that the reception of messages is disabled *)
+            if worker_pids <> []
+            then (
+              (* Check on the workers. *)
+              im_check_workers_status worker_pids worker_status ;
+
+              (* Get any messages from workers. *)
+              im_recv_messages im;
+
+              (* Relay messages. *)
+              im_handle_messages
+                workers worker_status invariant_id invariants ;
+
+              (* Send any messages in outgoing queue. *)
+              Eio_main.run @@ fun env ->
+                im_send_messages im env
+            ) ;
+              
+            (* We free the lock *)
+            Mutex.unlock new_workers_option.lock ;
+
+            Eio.Time.sleep (Eio.Stdenv.clock env) 0.01 ;
+
+            run workers worker_pids worker_status invariants
+          )
+
+        in
+
+        init_and_run workers
       
-      (* Unique invariant identifier and invariants hash table. *)
-      invariant_id := 1 ;
-      let invariants = (Hashtbl.create 1000) in
-
-      (* Running with the workers pids, the time hashtable, and the
-         invariants. *)
-      run workers worker_pids worker_status invariants
-
-    and run workers worker_pids worker_status invariants =
-
-      (* We take the lock to avoid race conditions during restarts,
-      especially we want to avoid messages from the previous analysis to be received *)
-      Mutex.lock new_workers_option.lock ;
-
-      (* Check for new workers, indicating a restart of the supervisor. *)
-      let res = new_workers_option.l_opt in
-      new_workers_option.l_opt <- None ;
-      match res with
-      | Some new_workers -> (
-        (* We do not need the lock here
-        because init_and_run does not reads the messages *)
-        Mutex.unlock new_workers_option.lock ;
-        Debug.messaging
-          "Child processes update, \
-            setting things up and resume running.";
-        init_and_run new_workers
-      )
-      | None -> (
-        (* No worker means that the reception of messages is disabled *)
-        if worker_pids <> []
-        then (
-          (* Check on the workers. *)
-          im_check_workers_status worker_pids worker_status ;
-
-          (* Get any messages from workers. *)
-          recv_messages
-            pull_sock true ;
-
-          (* Relay messages. *)
-          im_handle_messages
-            workers worker_status invariant_id invariants ;
-
-          (* Send any messages in outgoing queue. *)
-          im_send_messages pub_sock
-        ) ;
-        
-        (* We free the lock *)
-        Mutex.unlock new_workers_option.lock ;
-
-        minisleep 0.01 ;
-
-        run workers worker_pids worker_status invariants
-      )
-
-    in
-
-    try
-
-      (* Initializes and runs the background thread. If new workers
-         are provided, reinitializes and relaunches itself. *)
-      init_and_run workers
-
     with e -> on_exit e
                 
 
-  let worker_thread (bg_ctx, sub_sock, push_sock) (proc, on_exit) =
-
-    try 
-
-      (
-
+  let worker_thread worker on_exit =
+    try
+      Eio_main.run @@ fun env -> 
+        Eio.Switch.run @@ fun sw ->
         (*let rc =
           zmsg_send 
             (zmsg_of_msg 
@@ -952,47 +1171,38 @@ struct
 
         ignore(zmsg_recv sub_sock);*)
 
-        Debug.messaging "Worker is ready to send messages";
+          Debug.messaging "Worker is ready to send messages";
 
-        let confirmed_invariants = (Hashtbl.create 1000) in
-        let unconfirmed_invariants = (Hashtbl.create 100) in
-        let last_received_invariant_id = ref 0 in
+          let confirmed_invariants = (Hashtbl.create 1000) in
+          let unconfirmed_invariants = (Hashtbl.create 100) in
+          let last_received_invariant_id = ref 0 in
 
-        while not !exit_flag do
+          Eio.Fiber.fork_daemon ~sw (fun () ->
+            Subscriber.listen worker env;
+            `Stop_daemon);
+          let rec process_loop () =
+            if !exit_flag then
+              (* flush anything still queued before this fiber ends *)
+              worker_send_messages worker unconfirmed_invariants env
+            else begin
+              worker_recv_messages worker ;
 
-          (* get any messages from invariant manager *)
-          recv_messages sub_sock (is_invariant_manager proc);
+              if not !debug_mode then
+                worker_handle_messages
+                  unconfirmed_invariants
+                  confirmed_invariants
+                  last_received_invariant_id ;
 
-          (* handle incoming messages *)
-          if (not !debug_mode) then
+              worker_send_messages worker unconfirmed_invariants env ;
 
-            (
+              worker_resend_invariants unconfirmed_invariants ;
 
-              worker_handle_messages
-                unconfirmed_invariants
-                confirmed_invariants
-                last_received_invariant_id
-
-            );
-
-          (* send any messages in outgoing queue *)
-          worker_send_messages push_sock unconfirmed_invariants;
-
-          (* resend any old unconfirmed invariants *)
-          worker_resend_invariants unconfirmed_invariants;
-
-          minisleep 0.01
-
-        done ;
-
-        (* send any messages in outgoing queue *)
-        worker_send_messages push_sock unconfirmed_invariants;
-
-        Zmq.Socket.close sub_sock;
-        Zmq.Socket.close push_sock;
-        Zmq.Context.terminate bg_ctx;
-
-      )
+              Eio.Time.sleep (Eio.Stdenv.clock env) 0.01 ;
+              process_loop ()
+            end
+          in  
+        
+          process_loop ()
 
     with e -> on_exit e
 
@@ -1002,59 +1212,24 @@ struct
 (* ******************************************************************** *)
 
   let init_im () =
-    (* sockets for communication with worker processes *)
-    let bg_ctx = Zmq.Context.create () in
+    let im = Publisher.create "/tmp/im.sock" in
+    Debug.messaging "PUB socket is at /tmp/im.sock";
+    im
 
-    (* pub socket to send updates to workers *)
-    let pub_sock = Zmq.Socket.create bg_ctx Zmq.Socket.pub in
-    Zmq.Socket.bind pub_sock "tcp://127.0.0.1:*";
-    let bcast_port = Zmq.Socket.get_last_endpoint pub_sock in
-
-    (* pull socket to get updates from workers *)
-    let pull_sock = Zmq.Socket.create bg_ctx Zmq.Socket.pull in
-    Zmq.Socket.bind pull_sock "tcp://127.0.0.1:*";
-    let push_port = Zmq.Socket.get_last_endpoint pull_sock in
-    Debug.messaging "PUB socket is at %s, PULL socket is at %s" bcast_port
-      push_port;
-
-    (* Return sockets *)
-    ( (bg_ctx, pub_sock, pull_sock),
-      (* Return broadcast and push ports *)
-      (bcast_port, push_port) )
+  let init_worker proc im =
+    let worker = Subscriber.create (Publisher.path im) in
+    Subscriber.subscribe worker "CONTROL";
+    Subscriber.subscribe worker "RELAY";
+    Debug.messaging "SUB port for %a is %s" pp_print_kind_module proc worker.path;
+    worker
 
 
-  let init_worker proc bcast_port push_port =
-    (* sockets for communication with invariant manager *)
-    let bg_ctx = Zmq.Context.create () in
-
-    (* subscribe to updates from invariant manager *)
-    let sub_sock = Zmq.Socket.create bg_ctx Zmq.Socket.sub in
-
-    Zmq.Socket.connect sub_sock bcast_port;
-
-    Zmq.Socket.subscribe sub_sock "CONTROL";
-    Zmq.Socket.subscribe sub_sock "RELAY";
-
-    (* create push socket for sending updates to the invariant manager *)
-    let push_sock = Zmq.Socket.create bg_ctx Zmq.Socket.push in
-    Zmq.Socket.connect push_sock push_port;
-
-    Debug.messaging "SUB port for %a is %s, PUSH port is %s"
-      pp_print_kind_module proc bcast_port push_port;
-
-    (* Return sockets *)
-    (bg_ctx, sub_sock, push_sock)
-
-
-  let run_im (bg_ctx, pub_sock, pull_sock) workers on_exit =
+  let run_im im workers on_exit =
     try
       let p =
         Thread.create
-          (im_thread (bg_ctx, pub_sock, pull_sock) workers)
+          (im_thread im workers)
           (fun exn ->
-            Zmq.Socket.close pub_sock;
-            Zmq.Socket.close pull_sock;
-            Zmq.Context.terminate bg_ctx;
             on_exit exn)
       in
 
@@ -1065,17 +1240,13 @@ struct
     with SocketBindFailure -> raise SocketBindFailure
 
 
-  let run_worker (bg_ctx, sub_sock, push_sock) proc on_exit =
+  let run_worker worker proc on_exit =
     try
       let p =
         Thread.create
-          (worker_thread (bg_ctx, sub_sock, push_sock))
-          ( proc,
-            fun exn ->
-              Zmq.Socket.close sub_sock;
-              Zmq.Socket.close push_sock;
-              Zmq.Context.terminate bg_ctx;
-              on_exit exn )
+          (worker_thread worker )
+          (fun exn ->
+            on_exit exn)
       in
 
       initialized_process := Some proc;
@@ -1122,15 +1293,12 @@ struct
     )
 
 
-  let purge_im_mailbox (_, pub_sock, pull_sock) =
-    Debug.messaging "PUB: %s, PULL: %s"
-      (Zmq.Socket.get_last_endpoint pub_sock)
-      (Zmq.Socket.get_last_endpoint pull_sock);
+  let purge_im_mailbox im =
     if !initialized_process = None
     then raise NotInitialized
     else (
       (* Purging the messages because they refer to the old child processes *)
-      purge_messages pull_sock ;
+      purge_messages im;
       empty_list incoming |> ignore ;
       empty_list incoming_handled |> ignore ;
       empty_list outgoing |> ignore
