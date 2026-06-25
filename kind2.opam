@@ -24,6 +24,9 @@ depends: [
   "ounit2" {with-test}
   "yojson"
   "zmq" {>= "5.1.0"}
+  "eio"
+  "eio_main"
+  "cstruct"
 ]
 build: [
   ["dune" "subst"] {dev}
