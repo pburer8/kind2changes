@@ -21,7 +21,7 @@
 
 (library
  (name kind2dev)
- (libraries dune-build-info num str threads yojson zmq menhirLib eio eio_main cstruct fmt)
+ (libraries dune-build-info num str threads yojson zmq menhirLib eio eio_main cstruct)
  (modules
   (:standard \ C2Icnf kind2 moxi))
  (modules_without_implementation solverSig)
