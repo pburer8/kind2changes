@@ -273,13 +273,14 @@ Direct Installation Using Dune
 To build directly from sources you will also need the following software 
 first:
 
-* OCaml 4.14 or later,
+* OCaml 5.42 or later,
 * `Dune 2.7 or later <https://github.com/ocaml/dune>`_\,
 * dune-build-info,
 * `OCaml bindings for ZMQ <https://github.com/issuu/ocaml-zmq>`_\,
 * `Yojson <https://github.com/ocaml-community/yojson>`_\,
 * `num <https://github.com/ocaml/num>`_\,
-* `Menhir <http://gallium.inria.fr/~fpottier/menhir/>`_ parser generator
+* `Menhir <http://gallium.inria.fr/~fpottier/menhir/>`_ parser generator\,
+* `eio <https://github.com/ocaml-multicore/eio>`_\,
 
 First install this software on your system using your preferred method.
 Then clone the `Kind 2 git repository <https://github.com/kind2-mc/kind2>`_, 

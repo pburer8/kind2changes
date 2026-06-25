@@ -21,7 +21,7 @@ More advanced features include contract-based compositional verification, proof 
  (documentation "https://kind.cs.uiowa.edu/kind2_user_doc")
  (depends
   (ocaml
-   (>= 4.14))
+   (>= 5.42))
   dune
   dune-build-info
   (menhir
@@ -31,8 +31,9 @@ More advanced features include contract-based compositional verification, proof 
   (odoc :with-doc)
   (ounit2 :with-test)
   yojson
-  (zmq
-   (>= 5.1.0))
+  eio
+  eio_main
+  cstruct
  )
 )
 
@@ -43,7 +44,7 @@ More advanced features include contract-based compositional verification, proof 
  (homepage "https://kind2-mc.github.io/kind2")
  (depends
   (ocaml
-   (>= 4.14))
+   (>= 5.0))
   dune
   dune-build-info
   (menhir
@@ -53,8 +54,6 @@ More advanced features include contract-based compositional verification, proof 
   (odoc :with-doc)
   (ounit2 :with-test)
   yojson
-  (zmq
-   (>= 5.1.0))
  )
 )
 
