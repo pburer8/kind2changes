@@ -1041,8 +1041,12 @@ struct
     let rec check_status workers need_ping =
       match workers with
       | h :: t ->
+          let last_seen = 
+            try Hashtbl.find worker_status h 
+            with Not_found -> 0.0 (* Default to 0 if the worker hasn't registered a status yet *)
+          in
           if
-            Unix.time () -. Hashtbl.find worker_status h > worker_time_threshold
+            Unix.time () -. last_seen > worker_time_threshold
           then (
             (* at least one worker has not communicated recently *)
             Hashtbl.replace worker_status h (Unix.time ());
