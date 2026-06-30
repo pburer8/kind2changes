@@ -585,7 +585,6 @@ let process_invgen_mach_modules: TSys.t -> _ ISys.t -> kind_module list -> kind_
     )
     | _ -> other_modules
   )
-
  (* Add BMCSKIP engine if BMC is enabled and there is at least one reachability
     query with a lower bound *)
 let process_bmc_modules sys (modules: Lib.kind_module list) : Lib.kind_module list =
