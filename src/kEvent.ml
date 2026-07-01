@@ -226,6 +226,8 @@ let get_module () = !this_module
 (* Setup of the messaging: context and sockets of the invariant
    manager, ports to connect to for the workers *)
 type messaging_setup = EventMessaging.im_socket
+let path_of_setup setup = EventMessaging.path_of_im setup
+let setup_of_path path = EventMessaging.im_socket_of_path path
 
 type mthread = EventMessaging.thread
 

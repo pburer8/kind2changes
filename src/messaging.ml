@@ -99,6 +99,8 @@ sig
 
   (** Handle to the invariant manager's publisher socket *)
   type im_socket
+  val path_of_im : im_socket -> string
+  val im_socket_of_path : string -> im_socket
 
   (** Handle to a worker's subscriber socket *)
   type worker_socket
@@ -530,6 +532,15 @@ struct
 
   type im_socket = Publisher.t
   type worker_socket = Subscriber.t
+
+  let path_of_im im = Publisher.path im
+  (* Inside the Make functor in messaging.ml *)
+
+  let im_socket_of_path p =
+    { Publisher.mutex = Eio.Mutex.create (); 
+      Publisher.path = p; 
+      Publisher.subscribers = [];
+      Publisher.stream = Eio.Stream.create max_int }
 
   (* ******************************************************************** *)
   (* Threadsafe list option                                               *)
@@ -1221,8 +1232,8 @@ struct
 (* ******************************************************************** *)
 
   let init_im () =
-    let im = Publisher.create "/tmp/im.sock" in
-    Debug.messaging "PUB socket is at /tmp/im.sock";
+    let im = Publisher.create (temp_dir ^ "/im.sock") in
+    Debug.messaging "PUB socket is at %s/im.sock" temp_dir;
     im
 
   let init_worker proc im =

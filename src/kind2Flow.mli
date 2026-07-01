@@ -18,6 +18,7 @@
 
 (** Runs the analyses produced by the strategy module. *)
 val run : 'a InputSystem.t -> unit
+val run_worker_from_argv : string -> string -> 'a
 
 (* 
    Local Variables:

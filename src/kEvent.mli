@@ -245,6 +245,8 @@ val update_trans_sys :
 
 (** Setup of the messaging system *)
 type messaging_setup
+val path_of_setup : messaging_setup -> string
+val setup_of_path : string -> messaging_setup
 
 (** Background thread of the messaging system *)
 type mthread

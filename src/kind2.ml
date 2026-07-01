@@ -182,7 +182,11 @@ let main () =
     )
 ;;
 
-main ()
+let () = 
+  match Sys.argv with
+  | [| _; "--internal-worker"; kind_module; path |] ->
+    Kind2Flow.run_worker_from_argv kind_module path
+  | _ -> main ()
 
 (* 
    Local Variables:

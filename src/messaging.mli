@@ -78,6 +78,8 @@ sig
   type thread
 
   type im_socket
+  val path_of_im : im_socket -> string
+  val im_socket_of_path : string -> im_socket
 
   type worker_socket
 
