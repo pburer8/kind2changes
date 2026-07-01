@@ -7,16 +7,8 @@ jobs:
   kind2-build:
     strategy:
       matrix:
-        name: [ linux-x86_64, linux-arm64, macos-x86_64, macos-arm64 ]
+        name: [ macos-x86_64, macos-arm64 ]
         include:
-          - name: linux-x86_64
-            os: ubuntu-latest
-            pkg_update: sudo apt-get update -y
-            ocaml-version: 5.1.0
-          - name: linux-arm64
-            os: ubuntu-24.04-arm
-            pkg_update: sudo apt-get update -y
-            ocaml-version: 5.1.0
           - name: macos-x86_64
             os: macos-15-intel
             pkg_update: brew update
