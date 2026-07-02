@@ -99,7 +99,11 @@ sig
 
   (** Handle to the invariant manager's publisher socket *)
   type im_socket
+
+  (** Grab path of an invariant manager *)
   val path_of_im : im_socket -> string
+
+  (** Recreate a socket from the path of an invariant manager *)
   val im_socket_of_path : string -> im_socket
 
   (** Handle to a worker's subscriber socket *)

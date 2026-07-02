@@ -61,9 +61,14 @@ let renice () =
   if nice < 0 then
     KEvent.log L_info
       "[renice] ignoring negative niceness value."
-  else if nice > 0 then
-    let nice' = Unix.nice nice in
-    KEvent.log L_info "[renice] renicing to %d" nice'
+  else if nice > 0 then (
+    if Sys.win32 then
+      KEvent.log L_info
+        "[renice] process priority adjustment is not supported on Windows, ignoring."
+    else
+      let nice' = Unix.nice nice in
+      KEvent.log L_info "[renice] renicing to %d" nice'
+  )
 
 
 let fresh_ic3ia_instance_name =
@@ -288,42 +293,45 @@ let slaughter_kids process sys =
     List.iter (
       fun (pid, _) ->
         KEvent.log L_debug "Sending SIGKILL to PID %d" pid ;
-        try Unix.kill (- pid) Sys.sigkill with _ -> ()
+        try 
+          if Sys.win32 then
+            Unix.kill pid Sys.sigkill
+          else
+            Unix.kill (- pid) Sys.sigkill 
+        with _ -> ()
     ) ! child_pids ;
 
     KEvent.log L_debug "Waiting for remaining child processes to terminate" ;
 
+    let slaughter_reap_timeout = 5.0 in
     let timeout = ref false in
-
+    let deadline = Unix.gettimeofday () +. slaughter_reap_timeout in
     (
       try
         while !child_pids <> [] do
-          try
-            (* Wait for child process to terminate *)
-            let pid, status = Unix.wait () in
-            (* Remove killed process from list *)
-            child_pids := List.remove_assoc pid !child_pids ;
-            (* Log termination status *)
-            KEvent.log L_debug
-              "Process %d %a" pid pp_print_process_status status
-          with
-          (* Remember timeout to raise it later. *)
-          | TimeoutWall ->
-            KEvent.log_timeout true ;
-            timeout := true
+          if Unix.gettimeofday () > deadline then (
+            timeout := true ;
+            raise Exit
+          ) ;
+          let reaped_any =
+            List.fold_left (
+              fun reaped_any (pid, _) ->
+                match Unix.waitpid [Unix.WNOHANG] pid with
+                | 0, _ -> reaped_any
+                | reaped_pid, status ->
+                  child_pids := List.remove_assoc reaped_pid !child_pids ;
+                  KEvent.log L_debug
+                    "Process %d %a" reaped_pid pp_print_process_status status ;
+                  true
+                | exception Unix.Unix_error (Unix.ECHILD, _, _) ->
+                  child_pids := List.remove_assoc pid !child_pids ;
+                  reaped_any
+            ) false !child_pids
+          in
+          if not reaped_any then minisleep 0.05
         done
       with
-      (* No more child processes, this is the normal exit. *)
-      | Unix.Unix_error (Unix.ECHILD, _, _) ->
-        KEvent.log L_info "All child processes terminated." ;
-        if !timeout then raise TimeoutWall
-      (* Unix.wait was interrupted. *)
-      | Unix.Unix_error (Unix.EINTR, _, _) ->
-        let dummy_status = ExitCodes.error in
-        (* Ignoring exit code, whatever happened does not change the
-        outcome of the analysis. *)
-        Signal 0 |> status_of_exn process dummy_status |> ignore 
-
+      | Exit -> ()
       (* Exception in Unix.wait loop. *)
       | e ->
         let dummy_status = ExitCodes.error in
@@ -331,6 +339,12 @@ let slaughter_kids process sys =
         of the analysis. *)
         status_of_exn process dummy_status e |> ignore ;
     ) ;
+
+    if !timeout then (
+      KEvent.log_timeout true ;
+      KEvent.log L_fatal "Timed out waiting for children to terminate."
+    ) ;
+
 
     if ! child_pids <> [] then
       KEvent.log L_fatal "Some children did not exit." ;
@@ -433,7 +447,9 @@ let run_worker_from_argv kind_module_tag publisher_path =
   
 
   Signals.ignore_sigalrm () ;
-  Unix.setsid () |> ignore ;
+  if not Sys.win32 then
+    (try Unix.setsid () |> ignore with _ -> ());
+  
   let pid = Unix.getpid () in
 
   SMTSolver.delete_instance_entries () ;

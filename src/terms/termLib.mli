@@ -126,6 +126,9 @@ module Signals: sig
   (** Sets a handler for sigpipe. *)
   val set_sigpipe: unit -> unit
 
+  (** Checks a timeout. *)
+  val check_timeout_poll: unit -> unit
+
   (** Sets a timeout. *)
   val set_timeout: float -> unit
 

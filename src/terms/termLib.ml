@@ -425,16 +425,33 @@ module Signals = struct
     signals.sigpipe <- Exn ;
     set_sig Sys.sigpipe exception_on_signal
 
+  let timeout_deadline : float option ref = ref None
+
+  let check_timeout_poll () =
+    match !timeout_deadline with
+    | Some d when Unix.gettimeofday () >= d ->
+      timeout_deadline := None ;
+      raise TimeoutWall
+    | _ -> ()
 
   (* Sets a timeout. *)
   let set_timeout_value ?(interval = 0.) value =
-    set_sigalrm_timeout () ;
-    (* Set timer. *)
-    Unix.setitimer
-      Unix.ITIMER_REAL
-      { Unix.it_interval = interval ;
-        Unix.it_value = value }
-    |> ignore
+    if Sys.win32 then (
+      signals.sigalrm <- Timeout ;
+      timeout_deadline :=
+        if value > 0. then Some (Unix.gettimeofday () +. value) else None
+      (* Note: [interval] (periodic reload) isn't exercised anywhere in this
+         codebase's use of set_timeout_value — only one-shot wall timeouts
+         are set. If that changes, this branch needs to reload the deadline
+         after it fires rather than clearing it in check_timeout_poll. *)
+    ) else (
+      set_sigalrm_timeout () ;
+      Unix.setitimer
+        Unix.ITIMER_REAL
+        { Unix.it_interval = interval ;
+          Unix.it_value = value }
+      |> ignore
+    )
 
   (* Sets a timeout. *)
   let set_timeout value =
@@ -443,9 +460,15 @@ module Signals = struct
 
   (* Deactivates timeout. *)
   let unset_timeout () =
-    set_timeout_value 0. ;
-    signals.timeout <- None ;
-    set_sigalrm_exn ()
+    if Sys.win32 then (
+      timeout_deadline := None ;
+      signals.timeout <- None ;
+      signals.sigalrm <- Exn
+    ) else (
+      set_timeout_value 0. ;
+      signals.timeout <- None ;
+      set_sigalrm_exn ()
+    )
 
   (* Sets a timeout based on the flag value and the total time elapsed this
   far. *)

@@ -2239,6 +2239,7 @@ let purge_im : messaging_setup -> unit =
 (* Terminates if a termination message was received. Does NOT modified
    received messages. *)
 let check_termination () =
+  TermLib.Signals.check_timeout_poll () ;
   if EventMessaging.check_termination ()
   then raise Terminate else ()
 

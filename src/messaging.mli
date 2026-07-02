@@ -77,10 +77,16 @@ sig
   (** Thread *)
   type thread
 
+  (** Invariant manager socket *)
   type im_socket
+
+  (** Exposed path finding *)
   val path_of_im : im_socket -> string
+  
+  (** Recreate an invariant manager from its path *)
   val im_socket_of_path : string -> im_socket
 
+  (** Worker socket *)
   type worker_socket
 
   (** Create a messaging context and bind ports for the invariant

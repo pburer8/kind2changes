@@ -18,6 +18,8 @@
 
 (** Runs the analyses produced by the strategy module. *)
 val run : 'a InputSystem.t -> unit
+
+(** Re-entry dispatch for Unix.create_process *)
 val run_worker_from_argv : string -> string -> 'a
 
 (* 
