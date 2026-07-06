@@ -407,15 +407,21 @@ let on_exit_child ?(_alone=false) messaging_thread process exn =
 
 
 (** Forks and execs a child process. *)
-let run_process _in_sys _param _sys messaging_setup process =
+let run_process _in_sys param _sys messaging_setup process =
   let kind_module = get_kind_module process in
+
+  let param_file = Filename.temp_file "kind2_param_" ".marshal" in
+  let oc = open_out_bin param_file in
+  Marshal.to_channel oc (param : Analysis.param) [] ;
+  close_out oc ;
 
   let argv =
     Array.append
       [| Sys.executable_name ; "--internal-worker" ;
          s_of_kind_module kind_module ;
          (* however messaging_setup's path/identity is represented as a string *)
-          KEvent.path_of_setup messaging_setup |]
+          KEvent.path_of_setup messaging_setup ;
+          param_file |]
       (Array.sub Sys.argv 1 (Array.length Sys.argv - 1))
   in
 
@@ -428,7 +434,7 @@ let run_process _in_sys _param _sys messaging_setup process =
   child_pids := (pid, kind_module) :: !child_pids
 
 (** Entry point for a re-exec'd worker. *)
-let run_worker_from_argv kind_module_tag publisher_path worker_argv =
+let run_worker_from_argv kind_module_tag publisher_path worker_argv param_file =
   Flags.parse_argv ~argv:worker_argv () ;
   let kind_module = kind_module_of_string kind_module_tag in
   
@@ -451,10 +457,18 @@ let run_worker_from_argv kind_module_tag publisher_path worker_argv =
         exit ExitCodes.error
   in
 
-  let param = 
-    match ISys.next_analysis_of_strategy in_sys (Analysis.mk_results ()) with
-    | Some p -> p
-    | None -> failwith "Failed to reconstruct param: No analyzable nodes found."
+  let param =
+    try
+      let ic = open_in_bin param_file in
+      let p : Analysis.param = Marshal.from_channel ic in
+      close_in ic ;
+      (try Sys.remove param_file with _ -> ()) ;
+      p
+    with e ->
+      KEvent.log L_fatal
+        "Worker failed to deserialize analysis param from %s: %s"
+        param_file (Printexc.to_string e) ;
+      exit ExitCodes.error
   in
 
   let sys, _ = ISys.trans_sys_of_analysis in_sys param in
