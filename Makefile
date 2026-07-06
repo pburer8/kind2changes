@@ -3,6 +3,11 @@ LOCAL_ALLDOCDIR=$(CURDIR)/doc
 LOCAL_BINDIR=$(CURDIR)/bin
 LOCAL_DOCDIR=$(CURDIR)/ocamldoc
 LOCAL_USRDOCDIR=$(CURDIR)/doc/usr
+ifeq ($(OS),Windows_NT)
+    NULL_DEVICE := nul
+else
+    NULL_DEVICE := /dev/null
+endif
 
 .PHONY: all build clean doc install kind2-doc test uninstall
 
@@ -10,19 +15,19 @@ all: build
 
 build:
 	@dune build -p kind2 @install
-	@dune install -p kind2 --sections=bin --prefix . 2> /dev/null
+	@dune install -p kind2 --sections=bin --prefix . 2> NULL_DEVICE
 
 check:
 	@dune build -p kind2 --profile strict @check @install
-	@dune install -p kind2 --sections=bin --prefix . 2> /dev/null
+	@dune install -p kind2 --sections=bin --prefix . 2> NULL_DEVICE
 
 kmoxi:
 	@dune build -p kmoxi @install
-	@dune install -p kmoxi --sections=bin --prefix . 2> /dev/null
+	@dune install -p kmoxi --sections=bin --prefix . 2> NULL_DEVICE
 
 static:
 	@LINKING_MODE=static dune build -p kind2 @install
-	@dune install -p kind2 --sections=bin --prefix . 2> /dev/null
+	@dune install -p kind2 --sections=bin --prefix . 2> NULL_DEVICE
 
 clean:
 	@dune clean

@@ -16,8 +16,16 @@
 )
 
 (rule
-  (with-stdout-to linking-flags.sexp
-    (run ../scripts/gen-linking-flags.sh %{env:LINKING_MODE=dynamic} %{ocaml-config:system} %{ocaml-config:version})))
+  (enabled_if (or (= %{ocaml-config:system} linux) (= %{ocaml-config:system} macosx)))
+  (action
+    (with-stdout-to linking-flags.sexp
+      (run ../scripts/gen-linking-flags.sh %{env:LINKING_MODE=dynamic} %{ocaml-config:system} %{ocaml-config:version}))))
+
+(rule
+  (enabled_if (and (<> %{ocaml-config:system} linux) (<> %{ocaml-config:system} macosx)))
+  (action
+    (with-stdout-to linking-flags.sexp
+      (echo "()\n"))))
 
 (library
  (name kind2dev)
