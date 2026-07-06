@@ -932,6 +932,34 @@ let kind_module_of_string = function
     | Some m -> m 
     | None -> raise (Invalid_argument "kind_module_of_string")
 
+let s_of_kind_module = function
+ | `IC3 -> "IC3"
+ | `IC3QE -> "IC3QE"
+ | `IC3IA -> "IC3IA"
+ | `BMC -> "BMC"
+ | `BMCSKIP -> "BMCSKIP"
+ | `IND -> "IND"
+ | `IND2 -> "IND2"
+ | `INVGEN -> "INVGEN"
+ | `INVGENOS -> "INVGENOS"
+ | `INVGENINT -> "INVGENINT"
+ | `INVGENINTOS -> "INVGENINTOS"
+ | `INVGENBV width -> "INVGENBV" ^ (string_of_int width)
+ | `INVGENBVOS width -> "INVGENBVOS" ^ (string_of_int width)
+ | `INVGENUBV width -> "INVGENUBV" ^ (string_of_int width)
+ | `INVGENUBVOS width -> "INVGENUBVOS" ^ (string_of_int width)
+ | `INVGENMACH -> "INVGENMACH"
+ | `INVGENMACHOS -> "INVGENMACHOS"
+ | `INVGENREAL -> "INVGENREAL"
+ | `INVGENREALOS -> "INVGENREALOS"
+ | `C2I -> "C2I"
+ | `Interpreter -> "INTERP"
+ | `CMonitor -> "CMONITOR"
+ | `Supervisor -> "SUPER"
+ | `Parser -> "PARSE"
+ | `Certif -> "CERTIF"
+ | `MCS -> "MCS"
+ | `CONTRACTCK -> "CONTRACTCK"
 
 let int_of_kind_module = function
   | `CONTRACTCK -> -6

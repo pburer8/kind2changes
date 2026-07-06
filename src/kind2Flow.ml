@@ -413,7 +413,7 @@ let run_process _in_sys _param _sys messaging_setup process =
   let argv =
     Array.append
       [| Sys.executable_name ; "--internal-worker" ;
-         String.uppercase_ascii (short_name_of_kind_module kind_module) ;
+         s_of_kind_module kind_module ;
          (* however messaging_setup's path/identity is represented as a string *)
           KEvent.path_of_setup messaging_setup |]
       (Array.sub Sys.argv 1 (Array.length Sys.argv - 1))
@@ -428,10 +428,11 @@ let run_process _in_sys _param _sys messaging_setup process =
   child_pids := (pid, kind_module) :: !child_pids
 
 (** Entry point for a re-exec'd worker. *)
-let run_worker_from_argv kind_module_tag publisher_path =
+let run_worker_from_argv kind_module_tag publisher_path worker_argv =
+  Flags.parse_argv ~argv:worker_argv () ;
   let kind_module = kind_module_of_string kind_module_tag in
   
-
+  
   Signals.ignore_sigalrm () ;
   Unix.setsid () |> ignore ;
   let pid = Unix.getpid () in
@@ -441,7 +442,7 @@ let run_worker_from_argv kind_module_tag publisher_path =
   (* 1. Rebuild in_sys/param/sys using Flags *)
   let in_sys = 
     let input_file = Flags.input_file () in
-    match InputSystem.read_input_lustre true input_file with
+    match InputSystem.read_input_lustre false input_file with
     | Some sys -> sys
     | None -> 
         (* If we hit None here, something went terribly wrong 
