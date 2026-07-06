@@ -799,7 +799,7 @@ val subdir_for : string list -> string
 (** {1 Parsing of the command line} *)
 
 (** Parse the command line *)
-val parse_argv : unit -> unit
+val parse_argv : ?argv:string array -> unit -> unit
 
 (*
    Local Variables:

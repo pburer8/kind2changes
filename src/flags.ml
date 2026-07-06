@@ -3815,8 +3815,8 @@ let arg_float_of_string tuple s = try (
   Format.sprintf "expected float but got \"%s\"" s, tuple
 ) |> raise
 
-let parse_clas specs anon_action =
-  match Array.to_list Sys.argv with
+let parse_clas ?(argv = Sys.argv) specs anon_action =
+  match Array.to_list argv with
   | _ :: args ->
 
     (* Iterates over the specs to find the action for a CLA. *)
@@ -4214,9 +4214,9 @@ let post_argv_parse_actions () =
   if Global.log_format_json () then print_json_options ()
 
 
-let parse_argv () =
+let parse_argv ?(argv = Sys.argv) () =
   (* CLAPing. *)
-  parse_clas (Global.all_kind2_specs ()) anon_action ;
+  parse_clas ~argv (Global.all_kind2_specs ()) anon_action ;
 
   (* Colors if flag is not false and not in xml or json mode *)
   let open Format in
