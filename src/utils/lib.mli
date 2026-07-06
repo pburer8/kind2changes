@@ -444,7 +444,7 @@ val short_name_of_kind_module : kind_module -> string
 val kind_module_of_string : string -> kind_module
 
 (** String of a kind module *)
-val string_of_kind_module : kind_module -> string
+val s_of_kind_module : kind_module -> string
 
 (** Sleep for seconds, resolution is in ms *)
 val minisleep : float -> unit

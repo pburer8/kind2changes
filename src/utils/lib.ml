@@ -933,7 +933,7 @@ let kind_module_of_string = function
     | Some m -> m 
     | None -> raise (Invalid_argument "kind_module_of_string")
 
-let string_of_kind_module = function
+let s_of_kind_module = function
  | `IC3 -> "IC3"
  | `IC3QE -> "IC3QE"
  | `IC3IA -> "IC3IA"

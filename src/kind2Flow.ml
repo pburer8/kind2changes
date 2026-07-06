@@ -427,7 +427,7 @@ let run_process _in_sys _param _sys messaging_setup process =
   let argv =
     Array.append
       [| Sys.executable_name ; "--internal-worker" ;
-         string_of_kind_module kind_module ;
+         s_of_kind_module kind_module ;
          (* however messaging_setup's path/identity is represented as a string *)
           KEvent.path_of_setup messaging_setup |]
       (Array.sub Sys.argv 1 (Array.length Sys.argv - 1))
