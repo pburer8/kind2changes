@@ -1153,8 +1153,7 @@ struct
                 workers worker_status invariant_id invariants ;
 
               (* Send any messages in outgoing queue. *)
-              Eio_main.run @@ fun env ->
-                im_send_messages im env
+              im_send_messages im env
             ) ;
               
             (* We free the lock *)
