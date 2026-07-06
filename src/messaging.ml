@@ -330,10 +330,11 @@ struct
     Eio.Flow.read_exact flow body;
     body
 
-  (* Dynamically resolve the true OS temporary directory once at startup *)
-  let temp_dir = 
-    let raw_dir = try Sys.getenv "TMPDIR" with Not_found -> "/tmp" in
-    try Unix.realpath raw_dir with Unix.Unix_error _ -> raw_dir
+  let temp_dir =
+    let base = "/tmp" in
+    let dir = Filename.concat base (Printf.sprintf "kind2-%d" (Unix.getpid ())) in
+    (try Unix.mkdir dir 0o700 with Unix.Unix_error (Unix.EEXIST, _, _) -> ()) ;
+    dir
   
   (* Publisher module for invariant manager*)
   module Publisher : sig
@@ -402,7 +403,7 @@ struct
     let listen pub env =
       Eio.Switch.run @@ fun sw ->
         let net = Eio.Stdenv.net env in
-        let server = Eio.Net.listen net ~sw ~reuse_addr:true ~backlog:5 (`Unix pub.path) in
+        let server = Eio.Net.listen net ~sw ~reuse_addr:true ~backlog:64 (`Unix pub.path) in
         while true do
           recv pub sw server
         done
@@ -1153,7 +1154,8 @@ struct
                 workers worker_status invariant_id invariants ;
 
               (* Send any messages in outgoing queue. *)
-              im_send_messages im env
+              Eio_main.run @@ fun env ->
+                im_send_messages im env
             ) ;
               
             (* We free the lock *)
