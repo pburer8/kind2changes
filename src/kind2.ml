@@ -182,10 +182,15 @@ let main () =
     )
 ;;
 
-let () = 
+let () =
   match Sys.argv with
-  | [| _; "--internal-worker"; kind_module; path |] ->
-    Kind2Flow.run_worker_from_argv kind_module path
+  | argv when Array.length argv >= 4 && argv.(1) = "--internal-worker" ->
+    let kind_module = argv.(2) in
+    let path = argv.(3) in
+    (* Rebuild argv for Flags parsing: program name + original trailing args *)
+    let trailing = Array.sub argv 4 (Array.length argv - 4) in
+    let worker_argv = Array.append [| argv.(0) |] trailing in
+    Kind2Flow.run_worker_from_argv kind_module path worker_argv
   | _ -> main ()
 
 (* 
