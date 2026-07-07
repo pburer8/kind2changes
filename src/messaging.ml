@@ -335,9 +335,7 @@ struct
     body
 
   (* Dynamically resolve the true OS temporary directory once at startup *)
-  let temp_dir = 
-    let raw_dir = try Sys.getenv "TMPDIR" with Not_found -> "/tmp" in
-    try Unix.realpath raw_dir with Unix.Unix_error _ -> raw_dir
+  let temp_dir = Filename.get_temp_dir_name ()
   
   (* Publisher module for invariant manager*)
   module Publisher : sig
@@ -391,7 +389,7 @@ struct
               let parts = Marshal.from_string str 0 in
 
               (* If this is the first message from this subscriber, add it to our list *)
-              let path = temp_dir ^ "/worker" ^ (List.nth parts 1) ^ ".sock" in
+              let path = Filename.concat temp_dir (Printf.sprintf "worker%s.sock" (List.nth parts 1)) in
               Eio.Mutex.lock pub.mutex;
               if not (List.mem path pub.subscribers) then pub.subscribers <- path :: pub.subscribers;
               Eio.Mutex.unlock pub.mutex;
@@ -480,7 +478,7 @@ struct
 
     let create publisher_path =
       (* PID-based path *)
-      let p = temp_dir ^ Printf.sprintf ("/worker_%d.sock") (Unix.getpid ()) in
+      let p = Filename.concat temp_dir (Printf.sprintf ("worker_%d.sock") (Unix.getpid ())) in
       (try Unix.unlink p with Unix.Unix_error _ -> ());
       {
         mutex = Eio.Mutex.create (); path = p; publisher_path; topics = []; stream = Eio.Stream.create max_int
@@ -1236,7 +1234,7 @@ struct
 (* ******************************************************************** *)
 
   let init_im () =
-    let im = Publisher.create (temp_dir ^ "/im.sock") in
+    let im = Publisher.create (Filename.concat temp_dir "im.sock") in
     Debug.messaging "PUB socket is at %s/im.sock" temp_dir;
     im
 
