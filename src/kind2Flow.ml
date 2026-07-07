@@ -406,148 +406,8 @@ let on_exit_child ?(_alone=false) messaging_thread process exn =
   exit status
 
 
-(** Forks and execs a child process. *)
-let run_process _in_sys param _sys messaging_setup process =
-  let kind_module = get_kind_module process in
-
-  let param_file = Filename.temp_file "kind2_param_" ".marshal" in
-  let oc = open_out_bin param_file in
-  Marshal.to_channel oc (param : Analysis.param) [] ;
-  close_out oc ;
-
-  let argv =
-    Array.append
-      [| Sys.executable_name ; "--internal-worker" ;
-         s_of_kind_module kind_module ;
-         (* however messaging_setup's path/identity is represented as a string *)
-          KEvent.path_of_setup messaging_setup ;
-          param_file |]
-      (Array.sub Sys.argv 1 (Array.length Sys.argv - 1))
-  in
-
-  let pid =
-    Unix.create_process
-      Sys.executable_name argv
-      Unix.stdin Unix.stdout Unix.stderr
-  in
-
-  child_pids := (pid, kind_module) :: !child_pids
-
-(** Entry point for a re-exec'd worker. *)
-let run_worker_from_argv kind_module_tag publisher_path worker_argv param_file =
-  Flags.parse_argv ~argv:worker_argv () ;
-  let kind_module = kind_module_of_string kind_module_tag in
-  
-  
-  Signals.ignore_sigalrm () ;
-  Unix.setsid () |> ignore ;
-  let pid = Unix.getpid () in
-
-  SMTSolver.delete_instance_entries () ;
-
-  (* 1. Rebuild in_sys/param/sys using Flags *)
-  let in_sys = 
-    let input_file = Flags.input_file () in
-    match InputSystem.read_input_lustre false input_file with
-    | Some sys -> sys
-    | None -> 
-        (* If we hit None here, something went terribly wrong 
-           between the master process parsing it and the worker re-parsing it. *)
-        KEvent.log L_fatal "Worker failed to reconstruct input system from %s" input_file;
-        exit ExitCodes.error
-  in
-
-  let param =
-    try
-      let ic = open_in_bin param_file in
-      let p : Analysis.param = Marshal.from_channel ic in
-      close_in ic ;
-      (try Sys.remove param_file with _ -> ()) ;
-      p
-    with e ->
-      KEvent.log L_fatal
-        "Worker failed to deserialize analysis param from %s: %s"
-        param_file (Printexc.to_string e) ;
-      exit ExitCodes.error
-  in
-
-  let sys, _ = ISys.trans_sys_of_analysis in_sys param in
-
-  let messaging_setup = KEvent.setup_of_path publisher_path in
-
-  let messaging_thread =
-    on_exit_child None kind_module
-    |> KEvent.run_process kind_module messaging_setup
-  in
-  
-  try 
-
-      (* All log messages are sent to the invariant manager now. *)
-      KEvent.set_relay_log ();
-
-      (* Set module currently running. *)
-      KEvent.set_module kind_module;
-
-      (* Record backtraces on log levels debug and higher. *)
-      if output_on_level L_debug then
-        Printexc.record_backtrace true ;
-
-      KEvent.log L_debug
-        "Starting new process %a with PID %d" 
-        pp_print_kind_module kind_module
-        pid;
-
-      ( (* Change debug output to per process file. *)
-        match Flags.debug_log () with 
-        (* Keep if output to stdout. *)
-        | None -> ()
-        
-        (* Open channel to given file and create formatter on channel. *)
-        | Some f ->
-          try (* Output to [f.PROCESS-PID]. *)
-            let f' = 
-              Format.sprintf "%s.%s-%d" 
-                f (debug_ext_of_process kind_module) pid
-            in
-
-            (* Open output channel to file. *)
-            let oc = open_out f' in
-
-            (* Formatter writing to file. *)
-            Format.formatter_of_out_channel oc |> Debug.set_formatter
-
-          with
-          (* Ignore and keep previous file on error. *)
-          | Sys_error _ -> () 
-
-      ) ;
-      (* Retrieve input system. *)
-      (* let in_sys = in_sys in *)
-      (* Run main function of process *)
-      main_of_process (GenericCall kind_module) in_sys param sys ;
-      (* Cleanup and exit *)
-      on_exit_child (Some messaging_thread) kind_module Exit
-
-    with
-    (* Termination message received. *)
-    | KEvent.Terminate as e ->
-      on_exit_child (Some messaging_thread) kind_module e
-    (* Catch all other exceptions. *)
-    | e ->
-      (* Get backtrace now, Printf changes it. *)
-      let backtrace = Printexc.get_raw_backtrace () in
-      if Printexc.backtrace_status () then (
-        KEvent.log L_fatal
-          "Caught %s in %a.@ Backtrace:@ %a"
-          (Printexc.to_string e)
-          pp_print_kind_module kind_module
-          print_backtrace backtrace
-      ) ;
-      (* Cleanup and exit. *)
-      on_exit_child (Some messaging_thread) kind_module e
-
-(*(** Forks and runs a child process. *)*)
-(*let run_process in_sys param sys messaging_setup process =
+(** Forks and runs a child process. *)
+let run_process in_sys param sys messaging_setup process =
   let kind_module = get_kind_module process in
   (* Fork a new process. *)
   let pid = Unix.fork () in
@@ -639,7 +499,7 @@ let run_worker_from_argv kind_module_tag publisher_path worker_argv param_file =
   | _ ->
     (* Keep PID of child process and return. *)
     child_pids := (pid, kind_module) :: !child_pids
-*)
+
 
 let create_processes slice_to_prop modules sys =
   let ic3ia_module, other_modules = modules |> List.partition (
