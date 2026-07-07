@@ -71,8 +71,6 @@ jobs:
       run: opam install ounit2
 
     - name: Run ounit and regression tests
-      env:
-        TMPDIR: ${{ runner.temp }}
       run: opam exec make test
 
     - name: Build user documentation
