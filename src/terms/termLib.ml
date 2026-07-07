@@ -323,8 +323,10 @@ module Signals = struct
     )
 
   (* Sets the handler to ignore for some signal. *)
+  (* Sets the handler to ignore for some signal. *)
   let ignore_sig s =
-    Sys.set_signal s Sys.Signal_ignore
+    try Sys.set_signal s Sys.Signal_ignore
+    with Invalid_argument _ -> ()
 
   (* Sets the handler for sigalrm to ignore. *)
   let ignore_sigalrm () =
@@ -390,8 +392,10 @@ module Signals = struct
 *)
 
   (* Sets a handler for a signal. *)
+  (* Sets a handler for a signal. *)
   let set_sig s f =
-    Sys.set_signal s ( Sys.Signal_handle f )
+    try Sys.set_signal s ( Sys.Signal_handle f )
+    with Invalid_argument _ -> ()
 
 
   (* Sets a handler for sigalrm. *)
