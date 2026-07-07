@@ -4,7 +4,7 @@ lib: [
   "_build/install/default/lib/kind2/opam"
 ]
 bin: [
-  "_build/install/default/bin/kind2"
+  "_build/install/default/bin/kind2.exe"
 ]
 doc: [
   "_build/install/default/doc/kind2/CHANGES.md"
