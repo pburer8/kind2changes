@@ -20,7 +20,7 @@
 val run : 'a InputSystem.t -> unit
 
 (** Re-entry dispatch for Unix.create_process *)
-val run_worker_from_argv : string -> string -> string array -> 'a
+val run_worker_from_argv : string -> string -> string array -> string -> 'a
 
 (* 
    Local Variables:

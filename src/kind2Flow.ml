@@ -419,17 +419,34 @@ let on_exit_child ?(_alone=false) messaging_thread process exn =
   (* Exit process with status *)
   exit status
 
+type worker_task =
+  | RunGeneric of kind_module
+  | RunIC3IA of bool * bool * string * string (* fwd, slice_to_prop, prop_name, instance_name *)
 
 (** Forks and execs a child process. *)
-let run_process _in_sys _param _sys messaging_setup process =
+let run_process in_sys param sys messaging_setup process =
   let kind_module = get_kind_module process in
+
+  let task = match process with
+    | GenericCall m -> RunGeneric m
+    | IC3IA_Call (fwd, slice_to_prop, prop, instance_name) ->
+        RunIC3IA (fwd, slice_to_prop, prop.Property.prop_name, instance_name)
+  in
+  let param_file = Filename.temp_file "kind2_param_" ".marshal" in
+  let oc = open_out_bin param_file in
+
+  (* Marshal everything together to preserve hash-consing IDs and links.
+     We add Marshal.Closures just in case the AST contains functions. *)
+  Marshal.to_channel oc (param, task) [Marshal.Closures] ;
+  close_out oc ;
 
   let argv =
     Array.append
       [| Sys.executable_name ; "--internal-worker" ;
          s_of_kind_module kind_module ;
          (* however messaging_setup's path/identity is represented as a string *)
-          KEvent.path_of_setup messaging_setup |]
+          KEvent.path_of_setup messaging_setup ;
+          param_file |]
       (Array.sub Sys.argv 1 (Array.length Sys.argv - 1))
   in
 
@@ -443,7 +460,7 @@ let run_process _in_sys _param _sys messaging_setup process =
 
 
 (** Entry point for a re-exec'd worker. *)
-let run_worker_from_argv kind_module_tag publisher_path worker_argv =
+let run_worker_from_argv kind_module_tag publisher_path worker_argv param_file =
   Flags.parse_argv ~argv:worker_argv () ;
   
   let kind_module = kind_module_of_string kind_module_tag in
@@ -457,25 +474,45 @@ let run_worker_from_argv kind_module_tag publisher_path worker_argv =
 
   SMTSolver.delete_instance_entries () ;
 
-  (* 1. Rebuild in_sys/param/sys using Flags *)
   let in_sys = 
     let input_file = Flags.input_file () in
     match InputSystem.read_input_lustre false input_file with
     | Some sys -> sys
     | None -> 
-        (* If we hit None here, something went terribly wrong 
-           between the master process parsing it and the worker re-parsing it. *)
         KEvent.log L_fatal "Worker failed to reconstruct input system from %s" input_file;
         exit ExitCodes.error
   in
 
-  let param = 
-    match ISys.next_analysis_of_strategy in_sys (Analysis.mk_results ()) with
-    | Some p -> p
-    | None -> failwith "Failed to reconstruct param: No analyzable nodes found."
+  let param, task =
+    try
+      let ic = open_in_bin param_file in
+      let data = Marshal.from_channel ic in
+      close_in ic ;
+      (try Sys.remove param_file with _ -> ()) ;
+      data
+    with e ->
+      KEvent.log L_fatal
+        "Worker failed to deserialize analysis param from %s: %s"
+        param_file (Printexc.to_string e) ;
+      exit ExitCodes.error
   in
 
   let sys, _ = ISys.trans_sys_of_analysis in_sys param in
+
+  let local_process = match task with
+    | RunGeneric m -> GenericCall m
+    | RunIC3IA (fwd, slice_to_prop, prop_name, instance_name) ->
+        let local_prop =
+          try
+            List.find
+              (fun p -> p.Property.prop_name = prop_name)
+              (TSys.get_real_properties sys)
+          with Not_found ->
+            KEvent.log L_fatal "Worker failed to find property %s in local system" prop_name;
+            exit ExitCodes.error
+        in
+        IC3IA_Call (fwd, slice_to_prop, local_prop, instance_name)
+  in
 
   let messaging_setup = KEvent.setup_of_path publisher_path in
 
@@ -528,7 +565,7 @@ let run_worker_from_argv kind_module_tag publisher_path worker_argv =
       (* Retrieve input system. *)
       (* let in_sys = in_sys in *)
       (* Run main function of process *)
-      main_of_process (GenericCall kind_module) in_sys param sys ;
+      main_of_process (local_process) in_sys param sys ;
       (* Cleanup and exit *)
       on_exit_child (Some messaging_thread) kind_module Exit
 
