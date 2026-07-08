@@ -424,7 +424,7 @@ type worker_task =
   | RunIC3IA of bool * bool * string * string (* fwd, slice_to_prop, prop_name, instance_name *)
 
 (** Forks and execs a child process. *)
-let run_process in_sys param sys messaging_setup process =
+let run_process _in_sys param _sys messaging_setup process =
   let kind_module = get_kind_module process in
 
   let task = match process with
