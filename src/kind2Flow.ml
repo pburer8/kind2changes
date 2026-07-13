@@ -680,7 +680,7 @@ let run_worker_from_argv kind_module_tag publisher_path worker_argv param_file =
   | _ ->
     (* Keep PID of child process and return. *)
     child_pids := (pid, kind_module) :: !child_pids
-
+*)
 
 let create_processes slice_to_prop modules sys =
   let ic3ia_module, other_modules = modules |> List.partition (
