@@ -404,7 +404,7 @@ struct
     let listen pub env =
       Eio.Switch.run @@ fun sw ->
         let net = Eio.Stdenv.net env in
-        let server = Eio.Net.listen net ~sw ~reuse_addr:true ~backlog:5 (`Unix pub.path) in
+        let server = Eio.Net.listen net ~sw ~reuse_addr:true ~backlog:64 (`Unix pub.path) in
         while true do
           recv pub sw server
         done
