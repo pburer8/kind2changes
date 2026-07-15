@@ -389,7 +389,7 @@ struct
               let parts = Marshal.from_string str 0 in
 
               (* If this is the first message from this subscriber, add it to our list *)
-              let path = Filename.concat temp_dir (Printf.sprintf "worker%s.sock" (List.nth parts 1)) in
+              let path = Filename.concat temp_dir ("worker" ^ List.nth parts 1 ^ ".sock") in
               Eio.Mutex.lock pub.mutex;
               if not (List.mem path pub.subscribers) then pub.subscribers <- path :: pub.subscribers;
               Eio.Mutex.unlock pub.mutex;
@@ -478,7 +478,7 @@ struct
 
     let create publisher_path =
       (* PID-based path *)
-      let p = Filename.concat temp_dir (Printf.sprintf ("worker_%d.sock") (Unix.getpid ())) in
+      let p = Filename.concat temp_dir ("worker" ^ string_of_int (Unix.getpid ()) ^ ".sock") in
       (try Unix.unlink p with Unix.Unix_error _ -> ());
       {
         mutex = Eio.Mutex.create (); path = p; publisher_path; topics = []; stream = Eio.Stream.create max_int
