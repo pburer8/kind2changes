@@ -414,8 +414,13 @@ struct
       Eio.Stream.take_nonblocking pub.stream
 
     (* Send to all connections *)
-    let send connections zmsg = 
-      List.iter (fun conn -> send_frame conn (Cstruct.of_string (Marshal.to_string zmsg []))) connections
+    let send connections zmsg =
+      List.iter (fun conn ->
+        try
+          send_frame conn (Cstruct.of_string (Marshal.to_string zmsg []))
+        with
+        | Eio.Io _ | Unix.Unix_error _ | Sys_error _ -> ()
+      ) connections
 
     (* Get rid of old connections *)
     let remove_dead_connections pub env =
@@ -439,12 +444,13 @@ struct
     let send_all pub zmsg env =
       Eio.Switch.run @@ fun sw ->
         let net = Eio.Stdenv.net env in
-
-        (* Remove dead connections first *)
         remove_dead_connections pub env;
-
-        (* Connect to all subscribers *)
-        let connections = List.map (fun path -> Eio.Net.connect ~sw net (`Unix (path))) (snapshot_subscribers pub) in
+        let connections =
+          List.filter_map (fun path ->
+            try Some (Eio.Net.connect ~sw net (`Unix path))
+            with Eio.Io _ | Unix.Unix_error _ | Sys_error _ -> None
+          ) (snapshot_subscribers pub)
+        in
         Eio.Mutex.lock pub.mutex;
         send connections zmsg;
         Eio.Mutex.unlock pub.mutex
