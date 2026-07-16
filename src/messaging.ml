@@ -530,12 +530,12 @@ struct
     let send_all sub zmsg env =
       Eio.Switch.run @@ fun sw ->
         let net = Eio.Stdenv.net env in
-
-        (* Connect to publisher *)
-        let out_conn = Eio.Net.connect ~sw net (`Unix sub.publisher_path) in
-        Eio.Mutex.lock sub.mutex;
-        send out_conn zmsg;
-        Eio.Mutex.unlock sub.mutex
+        try
+          let out_conn = Eio.Net.connect ~sw net (`Unix sub.publisher_path) in
+          Eio.Mutex.lock sub.mutex;
+          send out_conn zmsg;
+          Eio.Mutex.unlock sub.mutex
+        with Eio.Io _ | Unix.Unix_error _ | Sys_error _ -> ()
   end
 
   type im_socket = Publisher.t
